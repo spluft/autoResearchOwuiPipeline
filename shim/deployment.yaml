@@ -1,0 +1,45 @@
+# decisions-shim — OWUI Auto Mode scorer (OWUI /decisions dialect -> 9router /v1/systemone)
+# Image is built locally (x86_64) and imported on proxmox: docker save | ssh .200 sudo k3s ctr -n k8s.io images import -
+# Secret (create out-of-band, never commit): kubectl -n llm-gateway create secret generic decisions-shim-env --from-literal=SHIM_UPSTREAM_KEY=<9router-gateway-key>
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: decisions-shim
+  namespace: llm-gateway
+  labels: {app: decisions-shim}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: decisions-shim}}
+  template:
+    metadata: {labels: {app: decisions-shim}}
+    spec:
+      nodeSelector: {kubernetes.io/hostname: proxmox}   # amd64-only image, co-located with 9router
+      containers:
+      - name: shim
+        image: decisions-shim:amd64-0.1.0
+        imagePullPolicy: IfNotPresent
+        ports: [{containerPort: 8080}]
+        env:
+        - name: SHIM_UPSTREAM_URL
+          value: "http://9router.llm-gateway.svc.cluster.local:20128/v1/systemone"  # cluster-internal port 20128 (30613 is NodePort only)
+        - name: SHIM_MODEL
+          value: "oc/jev-1.13-free"                     # flip to nd/clef-flash after upstream PR
+        - name: SHIM_UPSTREAM_TIMEOUT
+          value: "4.0"                                   # OWUI budgets 5 s
+        envFrom:
+        - secretRef: {name: decisions-shim-env}
+        readinessProbe:
+          httpGet: {path: /healthz, port: 8080}
+          periodSeconds: 10
+        resources:
+          requests: {cpu: 25m, memory: 96Mi}
+          limits: {cpu: 500m, memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: decisions-shim
+  namespace: llm-gateway
+spec:
+  selector: {app: decisions-shim}
+  ports: [{port: 8080, targetPort: 8080}]
